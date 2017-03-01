@@ -75,38 +75,39 @@ function getClientData(eventData, cb) {
     }
     else {
         console.log("============== no event data, self-triggering...")
+        var clientIDs = []; var clientData = [];
         //Get list of object in this bucket:
         var listObjectParams = { Bucket: process.env.S3_BUCKET_NAME };
-
         s3.listObjectsV2(listObjectParams, function(err, data) {
             if (err)
                 console.log("Error getting listObject: ", err, err.stack);
             else {
-                var clientIDs = [];
+
 
                 _.each(data.Contents, function(content){
                     clientIDs.push(content['Key']);})
-            var clientData = [];
-            //get client object for each client in clientIDs list:
-            _.each(clientIDs, function(id){
-                var getObjectParams = {
-                  Bucket: process.env.S3_BUCKET_NAME,
-                  Key: id.toString(),
-                };
-                s3.getObject(getObjectParams, function(err, data) {
-                  if (err) console.log(err, err.stack);
-                  else {
-                       var objectData = data.Body.toString('utf-8'); // Use the encoding necessary
-                       clientData.push(JSON.parse(objectData) )
-                       console.log("from S3 ", objectData)
-                  }
 
-              }); //s3.getObject
-          }); //each ClientIds
-          cb(clientData);
           } //else
         }); //s3.listObject
 
+        //get client object for each client in clientIDs list:
+        _.each(clientIDs, function(id){
+            var getObjectParams = {
+              Bucket: process.env.S3_BUCKET_NAME,
+              Key: id.toString(),
+            };
+            s3.getObject(getObjectParams, function(err, data) {
+              if (err) console.log(err, err.stack);
+              else {
+                   var objectData = data.Body.toString('utf-8'); // Use the encoding necessary
+                   clientData.push(objectData )
+                   console.log("from S3 ", objectData)
+              }
+
+          }); //s3.getObject
+      }); //each ClientIds
+
+        cb(clientData);
     }//else
 }
 
