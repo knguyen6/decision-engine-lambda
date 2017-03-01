@@ -26,6 +26,7 @@ exports.handler = (event, context, callback) => {
         var uri = 'http://' + process.env.FETCH_HOST + ':' + process.env.FETCH_PORT + requestPath + queryParam;
         console.log("== uri: ", uri);
 
+        var data = {"client" : clientData}
         //GET to the fetch service
         request(
             {   method: 'GET',
@@ -36,10 +37,7 @@ exports.handler = (event, context, callback) => {
               //got data from Fetch, set data to new data:
                if (!error && response.statusCode == 200) {
                     console.log(body)
-                    data = {
-                        "client" : clientData,
-                        "market_price" : body
-                    }
+                    data.market_price = body;
                 }
                 else {
                     //TODO: Error getting data from FetchSvc, use old data ?
@@ -77,7 +75,6 @@ function getClientData(eventData, cb) {
     }
     else {
         console.log("============== no event data, self-triggering...")
-        var clientData = [], clientIDs = [];
         //Get list of object in this bucket:
         var listObjectParams = { Bucket: process.env.S3_BUCKET_NAME };
 
@@ -85,9 +82,11 @@ function getClientData(eventData, cb) {
             if (err)
                 console.log("Error getting listObject: ", err, err.stack);
             else {
+                var clientIDs = [];
+
                 _.each(data.Contents, function(content){
                     clientIDs.push(content['Key']);})
-
+            var clientData = [];
             //get client object for each client in clientIDs list:
             _.each(clientIDs, function(id){
                 var getObjectParams = {
