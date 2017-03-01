@@ -59,7 +59,7 @@ var invokeDecisionEngine = function(data, context){
   };
   lambda.invoke(params, function(err, data) {
     if (err) {
-      context.fail("Error from Decision engine lambda: ", err);
+      context.fail("Error from Decide lambda: ", err);
     } else {
       context.succeed('Invocation success:  ' + JSON.stringify(data.Payload));
     }
@@ -71,25 +71,27 @@ var invokeDecisionEngine = function(data, context){
 // get json object in each file, push into an array of "client".
 function getClientData(eventData, cb) {
     if (eventData) {
-        cb(eventData);
+        cb(null, eventData);
     }
     else {
-        console.log("============== no event data, self-triggering...")
-        var clientIDs = []; var clientData = [];
+        var clientIDs = [], clientData = [];
+        async.waterfall([
+        function(callback) {
+
         //Get list of object in this bucket:
         var listObjectParams = { Bucket: process.env.S3_BUCKET_NAME };
         s3.listObjectsV2(listObjectParams, function(err, data) {
             if (err)
                 console.log("Error getting listObject: ", err, err.stack);
             else {
-
-
                 _.each(data.Contents, function(content){
                     clientIDs.push(content['Key']);})
-
           } //else
+          callback(null, clientIDs);
         }); //s3.listObject
 
+    },
+    function(clientIDs, callback) {
         //get client object for each client in clientIDs list:
         _.each(clientIDs, function(id){
             var getObjectParams = {
@@ -99,16 +101,23 @@ function getClientData(eventData, cb) {
             s3.getObject(getObjectParams, function(err, data) {
               if (err) console.log(err, err.stack);
               else {
-                   var objectData = data.Body.toString('utf-8'); // Use the encoding necessary
-                   clientData.push(objectData )
-                   console.log("from S3 ", objectData)
+                   var objectData = data.Body.toString().replace("'",'');
+                   clientData.push(JSON.parse(objectData) )
               }
-
           }); //s3.getObject
-      }); //each ClientIds
+        }); //each ClientIds
+        ////////////////////////////////////////////
+        setTimeout(function(){
+            callback(null, clientData);
+        }, 500);
 
-        cb(clientData);
-    }//else
+
+    }], function (err, result) {
+        if (err) console.log("Error getClientData(): %s", err)
+        cb(null, result);
+    });
+
+  }//else
 }
 
 
@@ -119,11 +128,10 @@ function getClientData(eventData, cb) {
 function parseStockTickers (userData) {
     var tickers = [];
     _.each(userData, function(data){
-        var temp = _.keys(data.stocks); //array of tickers.
-        _.each(temp, function(ticker){
+        _.each(data.stocks, function(stock){
             //if this ticker is not already present in tickers array, add it
-            if (!_.contains(tickers, ticker)) {
-                tickers.push(ticker);
+            if (!_.contains(tickers, stock.name)) {
+                tickers.push(stock.name);
             }
         });
     });
