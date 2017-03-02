@@ -1,5 +1,6 @@
 var request = require('request');
 var _ = require('underscore');
+var validatePayload = require('jsonschema').validate;
 var AWS = require('aws-sdk');
 var async = require('async');
 var config = require('./config.js')
@@ -11,10 +12,7 @@ var lambda = new AWS.Lambda(config.DECISION_LAMBDA);
 var s3 = new AWS.S3(config.S3_BUCKET);
 
 exports.handler = (event, context, callback) => {
-    console.log("=============== event ? ", event);
-    if (isInvalidData(event)) {
-        callback("Invalid payload or invalid data format")
-    }
+    console.log("Event from lambda 1 ? ", event);
 
     async.waterfall([
     function(cb) {
@@ -23,47 +21,53 @@ exports.handler = (event, context, callback) => {
     getClientData
     ], function (err, clientData ) {
         if (err) {
-            console.log("Error from getClientData(): ", err);
+            console.log("handler() Error ", err);
+            return callback(err, null);
         }
-        //stock tickers as query param string:
-        var queryParam = (parseStockTickers(clientData)).join(',');
-        var requestPath = '/stocks/getStocks?tickers=';
+        if (clientData.length > -1) {
 
-        //create request uri:
-        var uri = 'http://' + process.env.FETCH_HOST + requestPath + queryParam;
-        console.log("== uri: ", uri);
+            //stock tickers as query param string:
+            var queryParam = (parseStockTickers(clientData)).join(',');
+            var requestPath = '/stocks/getStocks?tickers=';
 
-        var data = {"client" : clientData}
-        //GET to the fetch service
-        request(
-            {   method: 'GET',
-                uri: uri,
-                timeout: 1500
+            //create request uri:
+            var uri = 'http://' + process.env.FETCH_HOST + requestPath + queryParam;
+            console.log("== uri: ", uri);
+
+            var data = {"client" : clientData}
+            //GET to the fetch service
+            request(
+                {   method: 'GET',
+                    uri: uri,
+                    timeout: 1500
+                }
+                ,function (error, response, body) {
+                  //got data from Fetch, set data to new data:
+                   if (!error && response.statusCode == 200) {
+                        console.log("Fetch successful: ", body)
+                        data.market_price = JSON.parse(body);
+                        console.log("Send to Decision: ", JSON.stringify(data))
+                        invokeDecisionEngine(JSON.stringify(data), context);
+                    }
+                    else {
+                        // Fail getting data from FetchSvc, just do nothing
+                        console.log("Fail getting data from FetchSvc: ", error);
+                    }
+                });
+
             }
-          , function (error, response, body) {
-              //got data from Fetch, set data to new data:
-               if (!error && response.statusCode == 200) {
-                    console.log("Successful response (Fetch): ", body)
-                    data.market_price = JSON.parse(body);
-                }
-                else {
-                    //TODO: Error getting data from FetchSvc, use old data ?
-                    console.log("Fail getting data from FetchSvc: ", error);
-                }
-                console.log("Send to Decision: ", JSON.stringify(data))
-                invokeDecisionEngine(JSON.stringify(data), context);
-            });
 
-    });
+        }); //waterfall
 
-    callback(null, event);
+        callback(null, event);
+
 
 };
 
 //call Decision lambda function to for decision engine
-var invokeDecisionEngine = function(data, context){
+var invokeDecisionEngine = (data, context) => {
     var params = {
-    FunctionName: process.env.DECISION_ARN, // the lambda function we are going to invoke
+    FunctionName: process.env.DECISION_ARN,
     InvocationType: 'RequestResponse',
     LogType: 'Tail',
     Payload: data
@@ -81,27 +85,28 @@ var invokeDecisionEngine = function(data, context){
 //call to S3 to get all files in s3 bucket,
 // get json object in each file, push into an array of "client".
 function getClientData(eventData, cb) {
-    console.log("== getClientData(): ", eventData);
     if (eventData) {
-        console.log("Trigger from lambda 1: ", eventData);
         cb(null, eventData);
     }
     else {
         console.log("==== Self-triggering ==== ");
         var clientIDs = [], clientData = [];
+
         async.waterfall([
         function(callback) {
 
         //Get list of object in this bucket:
         var listObjectParams = { Bucket: process.env.S3_BUCKET_NAME };
         s3.listObjectsV2(listObjectParams, function(err, data) {
-            if (err)
+            if (err) {
                 console.log("Error getting listObject: ", err, err.stack);
+                callback(err, null);
+            }
             else {
                 _.each(data.Contents, function(content){
                     clientIDs.push(content['Key']);})
-          } //else
-          callback(null, clientIDs);
+                    callback(null, clientIDs);
+            } //else
         }); //s3.listObject
     },
     function(clientIDs, callback) {
@@ -112,7 +117,10 @@ function getClientData(eventData, cb) {
               Key: id.toString(),
             };
             s3.getObject(getObjectParams, function(err, data) {
-              if (err) console.log(err, err.stack);
+              if (err) {
+                  console.log("Fail getting S3 object", err, err.stack);
+                  return callback(err, null)
+              }
               else {
                    var objectData = data.Body.toString().replace("'",'');
                    clientData.push(JSON.parse(objectData) )
@@ -127,7 +135,7 @@ function getClientData(eventData, cb) {
         ////////////////////////////////////////////
 
     }], function (err, result) {
-        if (err) console.log("Error getClientData(): %s", err)
+        if (err) console.log("getClientData() %s", err)
         cb(err, result);
     });
 
@@ -153,22 +161,4 @@ function parseStockTickers (userData) {
     return tickers;
 }
 
-//clientData = event, make sure it's JSON
-function isInvalidData(clientData){
-    var invalidData = false;
-    //there's event, but no 'data' field: invalid
-    if (clientData && !clientData.data) {
-            invalidData = true;
-    }
-    else {//there's event.data, but not JSON:
-        try {
-            JSON.parse(clientData);
-        } catch (e) {
-            console.log("Unable to parse to JSON: ", e);
-            invalid = true;
-        }
-    }
-
-    return invalidData;
-}
 //http://docs.aws.amazon.com/AWSJavaScriptSDK/latest/AWS/Lambda.html#invoke-property
