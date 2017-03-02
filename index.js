@@ -11,6 +11,10 @@ var lambda = new AWS.Lambda(config.DECISION_LAMBDA);
 var s3 = new AWS.S3(config.S3_BUCKET);
 
 exports.handler = (event, context, callback) => {
+    console.log("=============== event ? ", event);
+    if (isInvalidData(event)) {
+        callback("Invalid payload or invalid data format")
+    }
 
     async.waterfall([
     function(cb) {
@@ -18,12 +22,15 @@ exports.handler = (event, context, callback) => {
     },
     getClientData
     ], function (err, clientData ) {
+        if (err) {
+            console.log("Error from getClientData(): ", err);
+        }
         //stock tickers as query param string:
         var queryParam = (parseStockTickers(clientData)).join(',');
-        var requestPath = '/StocksAPI/stocks/getStocks?';
+        var requestPath = '/stocks/getStocks?tickers=';
 
         //create request uri:
-        var uri = 'http://' + process.env.FETCH_HOST + ':' + process.env.FETCH_PORT + requestPath + queryParam;
+        var uri = 'http://' + process.env.FETCH_HOST + requestPath + queryParam;
         console.log("== uri: ", uri);
 
         var data = {"client" : clientData}
@@ -36,17 +43,21 @@ exports.handler = (event, context, callback) => {
           , function (error, response, body) {
               //got data from Fetch, set data to new data:
                if (!error && response.statusCode == 200) {
-                    console.log(body)
-                    data.market_price = body;
+                    console.log("Successful response (Fetch): ", body)
+                    data.market_price = JSON.parse(body);
                 }
                 else {
                     //TODO: Error getting data from FetchSvc, use old data ?
                     console.log("Fail getting data from FetchSvc: ", error);
                 }
-                //TODO: uncomment this guy: invokeDecisionEngine(JSON.stringify(data), context);
+                console.log("Send to Decision: ", JSON.stringify(data))
+                invokeDecisionEngine(JSON.stringify(data), context);
             });
+
     });
+
     callback(null, event);
+
 };
 
 //call Decision lambda function to for decision engine
@@ -70,10 +81,13 @@ var invokeDecisionEngine = function(data, context){
 //call to S3 to get all files in s3 bucket,
 // get json object in each file, push into an array of "client".
 function getClientData(eventData, cb) {
+    console.log("== getClientData(): ", eventData);
     if (eventData) {
+        console.log("Trigger from lambda 1: ", eventData);
         cb(null, eventData);
     }
     else {
+        console.log("==== Self-triggering ==== ");
         var clientIDs = [], clientData = [];
         async.waterfall([
         function(callback) {
@@ -89,7 +103,6 @@ function getClientData(eventData, cb) {
           } //else
           callback(null, clientIDs);
         }); //s3.listObject
-
     },
     function(clientIDs, callback) {
         //get client object for each client in clientIDs list:
@@ -103,6 +116,7 @@ function getClientData(eventData, cb) {
               else {
                    var objectData = data.Body.toString().replace("'",'');
                    clientData.push(JSON.parse(objectData) )
+                   console.log("getObject from S3: ", objectData)
               }
           }); //s3.getObject
         }); //each ClientIds
@@ -110,11 +124,11 @@ function getClientData(eventData, cb) {
         setTimeout(function(){
             callback(null, clientData);
         }, 500);
-
+        ////////////////////////////////////////////
 
     }], function (err, result) {
         if (err) console.log("Error getClientData(): %s", err)
-        cb(null, result);
+        cb(err, result);
     });
 
   }//else
@@ -139,5 +153,22 @@ function parseStockTickers (userData) {
     return tickers;
 }
 
+//clientData = event, make sure it's JSON
+function isInvalidData(clientData){
+    var invalidData = false;
+    //there's event, but no 'data' field: invalid
+    if (clientData && !clientData.data) {
+            invalidData = true;
+    }
+    else {//there's event.data, but not JSON:
+        try {
+            JSON.parse(clientData);
+        } catch (e) {
+            console.log("Unable to parse to JSON: ", e);
+            invalid = true;
+        }
+    }
 
+    return invalidData;
+}
 //http://docs.aws.amazon.com/AWSJavaScriptSDK/latest/AWS/Lambda.html#invoke-property
